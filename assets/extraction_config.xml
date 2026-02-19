@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ExtractionConfig>
+  <OCR>
+    <MinConfidence>60</MinConfidence>
+  </OCR>
+
+  <Patterns>
+    <!-- Equipment tags like EC-EPE255-640052 (most common industrial format) -->
+    <Pattern>
+      <Name>EC_EQUIP_TAG</Name>
+      <Type>TAG</Type>
+      <Regex><![CDATA[\bEC-[A-Z0-9]{2,15}-\d{6}\b]]></Regex>
+    </Pattern>
+
+    <!-- Equipment tags like ES-EPE255-640001B -->
+    <Pattern>
+      <Name>ES_EQUIP_TAG</Name>
+      <Type>TAG</Type>
+      <Regex><![CDATA[\bES-[A-Z0-9]{2,15}-\d{6}[A-Z]?\b]]></Regex>
+    </Pattern>
+
+    <!-- VFD Model numbers like ACS880-21-0610-3 -->
+    <Pattern>
+      <Name>VFD_MODEL</Name>
+      <Type>MODEL</Type>
+      <Regex><![CDATA[\bACS880-\d{2}-\d{4}-\d\b]]></Regex>
+    </Pattern>
+
+    <!-- VFD Model numbers with power ratings like ACS880-31-0944-3 0.75kW -->
+    <Pattern>
+      <Name>VFD_MODEL_POWER</Name>
+      <Type>TAG</Type>
+      <Regex><![CDATA[\bACS880-\d{2}-\d{4}-\d\s*\d+[.,]?\d*kW\b]]></Regex>
+    </Pattern>
+
+    <!-- Requisition numbers like ET-J22N01-D1JEP-EU0002-WIPL-P-00 -->
+    <Pattern>
+      <Name>REQUISITION_NO</Name>
+      <Type>TAG</Type>
+      <Regex><![CDATA[\bET-J\d{2}N\d{2}-[A-Z0-9]{5,25}\b]]></Regex>
+    </Pattern>
+
+    <!-- Tags with + prefix like +INC-01, +SD01 -->
+    <Pattern>
+      <Name>PREFIX_TAG</Name>
+      <Type>TAG</Type>
+      <Regex><![CDATA[\b\+[A-Z0-9-]+\b]]></Regex>
+    </Pattern>
+
+    <!-- Equipment compact tags like MOTOR-123, VFD-001 (no spaces) -->
+    <Pattern>
+      <Name>EQUIP_COMPACT</Name>
+      <Type>EQUIP</Type>
+      <Regex><![CDATA[\b(?:MOTOR|PUMP|VFD|DRIVE|PANEL|VALVE|TANK|UPS|MCC|COMPRESSOR|FAN|BLOWER|MIXER|TRANSFORMER)[-]?\d{1,5}[A-Z]?\b]]></Regex>
+    </Pattern>
+
+    <!-- Standards like IS 60947, IEC 62040, ISO 9001 -->
+    <Pattern>
+      <Name>STANDARD</Name>
+      <Type>TAG</Type>
+      <Regex><![CDATA[\b(?:IS|IEC|ISO)\s?\d{4,6}(?:\s?Part\s?\d+)?\b]]></Regex>
+    </Pattern>
+  </Patterns>
+
+  <EquipmentKeywords>
+    <!-- Electrical/Power equipment -->
+    <Word>UPS</Word>
+    <Word>BATTERY</Word>
+    <Word>RECTIFIER</Word>
+    <Word>INVERTER</Word>
+    <Word>CIRCUIT_BREAKER</Word>
+    <Word>ACB</Word>
+    <Word>MCCB</Word>
+    <!-- Rotating equipment -->
+    <Word>MOTOR</Word>
+    <Word>PUMP</Word>
+    <Word>VFD</Word>
+    <Word>COMPRESSOR</Word>
+    <Word>FAN</Word>
+    <Word>BLOWER</Word>
+    <Word>MIXER</Word>
+    <!-- Static equipment -->
+    <Word>TRANSFORMER</Word>
+    <Word>TANK</Word>
+    <Word>VALVE</Word>
+    <Word>PANEL</Word>
+    <Word>MCC</Word>
+    <Word>CUBICLE</Word>
+  </EquipmentKeywords>
+
+  <RejectLines>
+    <!-- Reject common document header/footer text -->
+    <Word>WORLEY</Word>
+    <Word>ENERGY</Word>
+    <Word>CHEMICALS</Word>
+    <Word>RESOURCES</Word>
+    <Word>PURCHASE</Word>
+    <Word>REQUISITION</Word>
+    <Word>REVISION</Word>
+    <Word>PAGE</Word>
+    <Word>ANNEXURE</Word>
+    <Word>SECTION</Word>
+    <Word>FIGURE</Word>
+    <Word>TABLE</Word>
+    <Word>VENDOR</Word>
+    <Word>BUYER</Word>
+    <Word>BIDDER</Word>
+    <Word>RESPONSIBILITY</Word>
+    <Word>REQUIREMENTS</Word>
+    <Word>TRAINING</Word>
+    <Word>INSPECTION</Word>
+    <Word>SPECIFICATION</Word>
+    <Word>ATTACHMENT</Word>
+    <Word>CONTRACT</Word>
+    <Word>SUPPLY</Word>
+    <Word>Point closed</Word>
+    <Word>GA</Word>
+    <Word>indicating</Word>
+    <Word>lamp</Word>
+    <Word>missing</Word>
+    <Word>Noted</Word>
+  </RejectLines>
+</ExtractionConfig>
