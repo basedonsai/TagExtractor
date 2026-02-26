@@ -13,10 +13,10 @@ using OCRTool.Infrastructure.Logging;
 
 namespace OCRTool.Application
 {
-    /// <summary>
+      
     /// Main orchestration class that processes PDF files using OCR providers and PDF processors.
     /// Handles batch processing, progress reporting, cancellation, and result export.
-    /// </summary>
+    
     public class BatchProcessor
     {
         private readonly IOCRProvider _ocrProvider;
@@ -33,24 +33,24 @@ namespace OCRTool.Application
         private int _totalPages;
         private int _processedPages;
 
-        /// <summary>
+          
         /// Event raised when progress changes
-        /// </summary>
+        
         public event EventHandler<ProgressChangedEventArgs>? ProgressChanged;
 
-        /// <summary>
+          
         /// Event raised when processing completes
-        /// </summary>
+        
         public event EventHandler<ProcessingCompletedEventArgs>? ProcessingCompleted;
 
-        /// <summary>
+       
         /// Event raised for individual file processing updates
-        /// </summary>
+        
         public event EventHandler<FileProcessingEventArgs>? FileProcessing;
 
-        /// <summary>
+        
         /// Creates a new BatchProcessor with the specified dependencies
-        /// </summary>
+        
         public BatchProcessor(
             IOCRProvider ocrProvider,
             IPDFProcessor pdfProcessor,
@@ -67,9 +67,9 @@ namespace OCRTool.Application
             _config = config ?? throw new ArgumentNullException(nameof(config));
         }
 
-        /// <summary>
+        
         /// Creates a BatchProcessor with default implementations
-        /// </summary>
+        
         public static BatchProcessor Create(ConfigurationManager configManager, FileLogger logger)
         {
             var config = configManager.LoadConfiguration();
@@ -83,9 +83,9 @@ namespace OCRTool.Application
             return new BatchProcessor(ocrProvider, pdfProcessor, patternMatcher, excelExporter, logger, config);
         }
 
-        /// <summary>
+        
         /// Process all PDF files from the input folder
-        /// </summary>
+        
         public async Task ProcessBatchAsync(
             string inputFolder,
             string outputFolder,
@@ -127,9 +127,9 @@ namespace OCRTool.Application
             await ProcessFilesAsync(pdfFiles, outputFolder);
         }
 
-        /// <summary>
+        
         /// Process specific PDF files (instead of scanning a folder)
-        /// </summary>
+        
         public async Task ProcessSpecificFilesAsync(
             List<string> filePaths,
             string outputFolder,
@@ -160,9 +160,9 @@ namespace OCRTool.Application
             await ProcessFilesAsync(filePaths.ToArray(), outputFolder);
         }
 
-        /// <summary>
+        
         /// Internal method to process a list of files
-        /// </summary>
+        
         private async Task ProcessFilesAsync(string[] pdfFiles, string outputFolder)
         {
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
@@ -263,9 +263,9 @@ namespace OCRTool.Application
             }
         }
 
-        /// <summary>
+        
         /// Process a single PDF file
-        /// </summary>
+        
         private async Task<List<ExtractionResult>> ProcessSingleFileAsync(string pdfPath)
         {
             var results = new List<ExtractionResult>();
@@ -319,9 +319,9 @@ namespace OCRTool.Application
             return results;
         }
 
-        /// <summary>
+        
         /// Process a single page
-        /// </summary>
+        
         private async Task<ExtractionResult> ProcessPageAsync(string pdfPath, PageResult page)
         {
             var result = new ExtractionResult
@@ -333,11 +333,15 @@ namespace OCRTool.Application
             };
 
             // Debug: Log text extraction info for ALL pages
-            var textLength = page.RawText?.Length ?? 0;
-            var textPreview = textLength > 0 
-                ? (page.RawText.Length > 100 ? page.RawText.Substring(0, 100).Replace("\n", " ").Replace("\r", "") + "..." : page.RawText.Replace("\n", " ").Replace("\r", ""))
+            var rawText = page.RawText ?? string.Empty;
+            var textLength = rawText.Length;
+
+            var textPreview = textLength > 0
+                ? (rawText.Length > 100
+                    ? rawText.Substring(0, 100).Replace("\n", " ").Replace("\r", "") + "..."
+                    : rawText.Replace("\n", " ").Replace("\r", ""))
                 : "(empty)";
-            
+
             _logger.LogPage(
                 Path.GetFileName(pdfPath),
                 page.PageNumber,
@@ -346,47 +350,77 @@ namespace OCRTool.Application
                 "debug",
                 $"Page {page.PageNumber}: IsSearchable={page.IsSearchable}, TextLength={textLength}, HasImage={page.ImageData?.Length > 0}, Text='{textPreview}'");
 
-            // Python's approach: Always use OCR on extracted images
-            // This ensures we get the same results as Python
-            if (page.ImageData != null && page.ImageData.Length > 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"[BATCH] Page {page.PageNumber}: Using OCR on image data ({page.ImageData.Length} bytes)");
-                var ocrResult = await Task.Run(() => _ocrProvider.ProcessImage(page.ImageData));
-                result.RawText = ocrResult.RawText;
-                result.Confidence = ocrResult.Confidence;
+            // =====================================================
+            // HYBRID EXTRACTION LOGIC (CORRECT APPROACH)
+            // =====================================================
 
-                // DEBUG: Show OCR text being processed
-                if (!string.IsNullOrWhiteSpace(ocrResult.RawText))
+            string pageText = page.RawText ?? string.Empty;
+            double confidence = 100.0; // searchable text assumed high confidence
+
+            // If searchable text is empty, fallback to OCR
+            if (string.IsNullOrWhiteSpace(pageText) && page.ImageData?.Length > 0)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"[BATCH] Page {page.PageNumber}: No searchable text found. Using OCR.");
+
+                var ocrResult = await Task.Run(() => _ocrProvider.ProcessImage(page.ImageData));
+
+                pageText = ocrResult.RawText ?? string.Empty;
+                confidence = ocrResult.Confidence;
+
+                if (!string.IsNullOrWhiteSpace(pageText))
                 {
-                    var preview = ocrResult.RawText.Length > 200 ? ocrResult.RawText.Substring(0, 200) + "..." : ocrResult.RawText;
-                    System.Diagnostics.Debug.WriteLine($"[BATCH] OCR RESULT: {preview.Replace("\n", " ").Replace("\r", "")}");
+                    var preview = pageText.Length > 200
+                        ? pageText.Substring(0, 200) + "..."
+                        : pageText;
+
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[BATCH] OCR RESULT: {preview.Replace("\n", " ").Replace("\r", "")}");
                 }
                 else
                 {
                     System.Diagnostics.Debug.WriteLine("[BATCH] OCR RESULT: (empty)");
                 }
-
-                // Apply pattern matching to OCR result
-                var patternResult = _patternMatcher.Match(ocrResult.RawText);
-                
-                // DEBUG: Log OCR pattern matching results
-                System.Diagnostics.Debug.WriteLine($"[BATCH] OCR Pattern matches: {patternResult.Tags.Count} tags, {patternResult.Equipment.Count} equipment");
-                
-                result.Tags.AddRange(patternResult.Tags.ConvertAll(t => new TagItem { Value = t.Value, Type = t.Type, Confidence = t.Confidence }));
-                result.Equipment.AddRange(patternResult.Equipment.ConvertAll(e => new EquipmentItem { Value = e.Value, Confidence = e.Confidence }));
             }
             else
             {
-                System.Diagnostics.Debug.WriteLine($"[BATCH] Page {page.PageNumber}: No image data available for OCR");
-                result.Confidence = 0.0;
+                System.Diagnostics.Debug.WriteLine(
+                    $"[BATCH] Page {page.PageNumber}: Using searchable text directly.");
             }
+
+            // Update result text + confidence
+            result.RawText = pageText;
+            result.Confidence = confidence;
+
+            // =====================================================
+            // PATTERN MATCHING
+            // =====================================================
+
+            var normalizedText = pageText
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .Replace("  ", " ");
+
+            var patternResult = _patternMatcher.Match(
+                normalizedText,
+                Path.GetFileName(pdfPath),
+                page.PageNumber,
+                confidence
+            );
+
+            System.Diagnostics.Debug.WriteLine(
+                $"[BATCH] Pattern matches: {patternResult.Tags.Count} tags, {patternResult.Equipment.Count} equipment");
+
+            result.Tags.AddRange(patternResult.Tags);
+            result.Equipment.AddRange(patternResult.Equipment);
 
             return result;
         }
 
-        /// <summary>
+
+        
         /// Process a single file synchronously (for testing)
-        /// </summary>
+        
         public List<ExtractionResult> ProcessSingleFile(string pdfPath)
         {
             var pages = _pdfProcessor.ExtractPages(pdfPath);
@@ -400,58 +434,58 @@ namespace OCRTool.Application
             return results;
         }
 
-        /// <summary>
+        
         /// Cancel the current batch processing
-        /// </summary>
+        
         public void Cancel()
         {
             _cancellationTokenSource?.Cancel();
         }
 
-        /// <summary>
+        
         /// Get all processing logs
-        /// </summary>
+        
         public List<ProcessingLog> GetAllLogs()
         {
             return _allLogs;
         }
 
-        /// <summary>
+        
         /// Set the total page count (optional, for more accurate progress reporting)
-        /// </summary>
+        
         public void SetTotalPages(int totalPages)
         {
             _totalPages = totalPages;
         }
 
-        /// <summary>
+        
         /// Raise ProgressChanged event
-        /// </summary>
+        
         protected virtual void OnProgressChanged(ProgressChangedEventArgs e)
         {
             ProgressChanged?.Invoke(this, e);
         }
 
-        /// <summary>
+        
         /// Raise ProcessingCompleted event
-        /// </summary>
+        
         protected virtual void OnProcessingCompleted(ProcessingCompletedEventArgs e)
         {
             ProcessingCompleted?.Invoke(this, e);
         }
 
-        /// <summary>
+        
         /// Raise FileProcessing event
-        /// </summary>
+        
         protected virtual void OnFileProcessing(FileProcessingEventArgs e)
         {
             FileProcessing?.Invoke(this, e);
         }
     }
 
-    /// <summary>
+    
     /// Event arguments for processing completed
-    /// </summary>
+    
     public class ProcessingCompletedEventArgs : EventArgs
     {
         public bool Success { get; set; }
@@ -462,9 +496,9 @@ namespace OCRTool.Application
         public Exception? Error { get; set; }
     }
 
-    /// <summary>
+    
     /// Event arguments for file processing updates
-    /// </summary>
+    
     public class FileProcessingEventArgs : EventArgs
     {
         public string FileName { get; set; } = string.Empty;

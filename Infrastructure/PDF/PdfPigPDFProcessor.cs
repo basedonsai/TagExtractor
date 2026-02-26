@@ -50,49 +50,29 @@ namespace OCRTool.Infrastructure.PDF
         /// <summary>
         /// Analyze a page to determine if it's searchable or scanned
         /// </summary>
-        private PageResult AnalyzePage(UglyToad.PdfPig.Content.Page page, int pageNumber)
+        private PageResult AnalyzePage(Page page, int pageNumber)
         {
-            // Get text from the page
-            var text = page.Text;
-            var textLength = text?.Length ?? 0;
+            var text = page.Text ?? string.Empty;
+            var isSearchable = !string.IsNullOrWhiteSpace(text) && text.Length > 50;
 
-            // DEBUG: Add logging to see what text we're getting
-            System.Diagnostics.Debug.WriteLine($"[PDF] Page {pageNumber}: Text length = {textLength}");
-            if (!string.IsNullOrWhiteSpace(text) && textLength > 0)
-            {
-                var preview = text.Length > 100 ? text.Substring(0, 100) + "..." : text;
-                System.Diagnostics.Debug.WriteLine($"[PDF] Page {pageNumber}: Text preview = {preview.Replace("\n", " ").Replace("\r", "")}");
-            }
-
-            // Check for embedded text
-            var hasText = !string.IsNullOrWhiteSpace(text) && textLength > 10;
-
-            // Determine if searchable or scanned
-            // A page is searchable if it has significant text content
-            var isSearchable = hasText && textLength > 50;
-
-            // Extract images for OCR - Python approach: always extract images
             byte[]? imageData = null;
-            
-            // Python's approach: Always extract page as image for OCR
-            // This ensures we get the same OCR results as Python
-            imageData = ExtractPageImage(page);
-            
-            // If image extraction failed, try alternative method
-            if (imageData == null)
+            if (!isSearchable)
             {
-                imageData = TryRenderPageToImage(page);
+                imageData = ExtractPageImage(page);
+                if (imageData == null)
+                    imageData = TryRenderPageToImage(page);
             }
 
             return new PageResult
             {
                 PageNumber = pageNumber,
                 IsSearchable = isSearchable,
-                RawText = text ?? string.Empty,
+                RawText = text,
                 ImageData = imageData,
-                TextLength = textLength
+                TextLength = text.Length
             };
         }
+
 
         /// <summary>
         /// Extract images from a page using reflection to access internal methods

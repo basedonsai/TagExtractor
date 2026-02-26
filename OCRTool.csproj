@@ -29,6 +29,7 @@
     <Folder Include="Infrastructure\Logging\" />
     <Folder Include="Infrastructure\PDF\" />
     <Folder Include="Infrastructure\OCR\" />
+    <Folder Include="Services\" />
     <Folder Include="tessdata\" />
   </ItemGroup>
 

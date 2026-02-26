@@ -1,8 +1,6 @@
 namespace OCRTool.Core.Models
 {
-    /// <summary>
     /// Represents a tag extracted from the document
-    /// </summary>
     public class TagItem
     {
         public string Value { get; set; } = string.Empty;
@@ -12,3 +10,4 @@ namespace OCRTool.Core.Models
         public string SourceFile { get; set; } = string.Empty;
     }
 }
+
