@@ -25,6 +25,10 @@ namespace OCRTool.Application
         private readonly ExcelExporter _excelExporter;
         private readonly FileLogger _logger;
         private readonly ExtractionConfig _config;
+        private readonly ILayoutTokenExtractor _layoutTokenExtractor;
+        private readonly IPageClassifier _pageClassifier;
+        private readonly IRecordBuilder _tableEngine;
+        private readonly IRecordBuilder _proximityEngine;
         private readonly List<ProcessingLog> _allLogs = new List<ProcessingLog>();
         
         private CancellationTokenSource? _cancellationTokenSource;
@@ -57,7 +61,11 @@ namespace OCRTool.Application
             PatternMatcher patternMatcher,
             ExcelExporter excelExporter,
             FileLogger logger,
-            ExtractionConfig config)
+            ExtractionConfig config,
+            ILayoutTokenExtractor layoutTokenExtractor,
+            IPageClassifier pageClassifier,
+            IRecordBuilder tableEngine,
+            IRecordBuilder proximityEngine)
         {
             _ocrProvider = ocrProvider ?? throw new ArgumentNullException(nameof(ocrProvider));
             _pdfProcessor = pdfProcessor ?? throw new ArgumentNullException(nameof(pdfProcessor));
@@ -65,6 +73,10 @@ namespace OCRTool.Application
             _excelExporter = excelExporter ?? throw new ArgumentNullException(nameof(excelExporter));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _config = config ?? throw new ArgumentNullException(nameof(config));
+            _layoutTokenExtractor = layoutTokenExtractor ?? throw new ArgumentNullException(nameof(layoutTokenExtractor));
+            _pageClassifier = pageClassifier ?? throw new ArgumentNullException(nameof(pageClassifier));
+            _tableEngine = tableEngine ?? throw new ArgumentNullException(nameof(tableEngine));
+            _proximityEngine = proximityEngine ?? throw new ArgumentNullException(nameof(proximityEngine));
         }
 
         
@@ -79,8 +91,12 @@ namespace OCRTool.Application
             var pdfProcessor = new Infrastructure.PDF.PdfPigPDFProcessor();
             var patternMatcher = new PatternMatcher(config);
             var excelExporter = new ExcelExporter();
+            var layoutTokenExtractor = new Infrastructure.Layout.LayoutTokenExtractor();
+            var pageClassifier = new Core.Classification.PageClassifier();
+            var tableEngine = new Core.RecordBuilders.TableEngine();
+            var proximityEngine = new Core.RecordBuilders.ProximityEngine(patternMatcher);
             
-            return new BatchProcessor(ocrProvider, pdfProcessor, patternMatcher, excelExporter, logger, config);
+            return new BatchProcessor(ocrProvider, pdfProcessor, patternMatcher, excelExporter, logger, config, layoutTokenExtractor, pageClassifier, tableEngine, proximityEngine);
         }
 
         
@@ -391,6 +407,232 @@ namespace OCRTool.Application
             // Update result text + confidence
             result.RawText = pageText;
             result.Confidence = confidence;
+
+            // =====================================================
+            // LAYOUT TOKEN EXTRACTION
+            // =====================================================
+
+            try
+            {
+                var extractionStartTime = DateTime.Now;
+                
+                if (page.IsSearchable && page.PdfPigPage != null)
+                {
+                    // Extract layout tokens from searchable PDF using PdfPig
+                    result.LayoutTokens = _layoutTokenExtractor.ExtractFromPdfPigPage(page.PdfPigPage, page.PageNumber);
+                    
+                    var extractionTime = (DateTime.Now - extractionStartTime).TotalMilliseconds;
+                    _logger.LogPage(
+                        Path.GetFileName(pdfPath),
+                        page.PageNumber,
+                        page.IsSearchable,
+                        0,
+                        "info",
+                        $"Layout token extraction: {result.LayoutTokens.Count} tokens from PdfPig in {extractionTime:F0}ms");
+                    
+                    System.Diagnostics.Debug.WriteLine(
+                        $"[BATCH] Page {page.PageNumber}: Extracted {result.LayoutTokens.Count} layout tokens from PdfPig in {extractionTime:F0}ms");
+                }
+                else if (!page.IsSearchable && page.ImageData?.Length > 0)
+                {
+                    // Extract layout tokens from scanned page using Tesseract TSV
+                    var tsvOutput = (_ocrProvider as Infrastructure.OCR.TesseractOCRProvider)?.GetTsvOutput(page.ImageData);
+                    
+                    if (!string.IsNullOrWhiteSpace(tsvOutput))
+                    {
+                        result.LayoutTokens = _layoutTokenExtractor.ExtractFromTesseractTsv(tsvOutput, page.PageNumber);
+                        
+                        var extractionTime = (DateTime.Now - extractionStartTime).TotalMilliseconds;
+                        _logger.LogPage(
+                            Path.GetFileName(pdfPath),
+                            page.PageNumber,
+                            page.IsSearchable,
+                            0,
+                            "info",
+                            $"Layout token extraction: {result.LayoutTokens.Count} tokens from Tesseract TSV in {extractionTime:F0}ms");
+                        
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[BATCH] Page {page.PageNumber}: Extracted {result.LayoutTokens.Count} layout tokens from Tesseract TSV in {extractionTime:F0}ms");
+                    }
+                    else
+                    {
+                        result.LayoutTokens = new List<LayoutToken>(); // Empty collection on TSV failure
+                        _logger.LogPage(
+                            Path.GetFileName(pdfPath),
+                            page.PageNumber,
+                            page.IsSearchable,
+                            0,
+                            "warning",
+                            "Layout token extraction: Failed to get Tesseract TSV output, continuing with text-only extraction");
+                        
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[BATCH] Page {page.PageNumber}: Failed to get Tesseract TSV output for layout token extraction");
+                    }
+                }
+                else
+                {
+                    // No layout token extraction possible (empty page or missing data)
+                    result.LayoutTokens = new List<LayoutToken>();
+                    _logger.LogPage(
+                        Path.GetFileName(pdfPath),
+                        page.PageNumber,
+                        page.IsSearchable,
+                        0,
+                        "info",
+                        "Layout token extraction: Skipped (no searchable text or image data available)");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Graceful fallback: log error and continue with empty layout token collection
+                result.LayoutTokens = new List<LayoutToken>();
+                _logger.LogPage(
+                    Path.GetFileName(pdfPath),
+                    page.PageNumber,
+                    page.IsSearchable,
+                    0,
+                    "error",
+                    $"Layout token extraction failed: {ex.Message}. Continuing with text-only extraction.");
+                
+                System.Diagnostics.Debug.WriteLine($"[BATCH] Layout token extraction failed for page {page.PageNumber}: {ex.Message}");
+            }
+
+            // =====================================================
+            // PAGE CLASSIFICATION
+            // =====================================================
+
+            try
+            {
+                // Classify page based on layout token distribution
+                result.Classification = _pageClassifier.Classify(result.LayoutTokens);
+                
+                // Build classification log message with row/column counts for Table pages
+                var classificationMessage = $"Page classification: {result.Classification.PageType} - {result.Classification.Reasoning}";
+                if (result.Classification.PageType == PageType.Table)
+                {
+                    classificationMessage += $" (Rows: {result.Classification.RowCount}, Columns: {result.Classification.ColumnCount})";
+                }
+                
+                _logger.LogPage(
+                    Path.GetFileName(pdfPath),
+                    page.PageNumber,
+                    page.IsSearchable,
+                    0,
+                    "info",
+                    classificationMessage);
+                
+                System.Diagnostics.Debug.WriteLine(
+                    $"[BATCH] Page {page.PageNumber}: {classificationMessage}");
+            }
+            catch (Exception ex)
+            {
+                // Graceful fallback: default to Sparse and log error
+                result.Classification = new PageClassification
+                {
+                    PageType = PageType.Sparse,
+                    Reasoning = "Classification failed, defaulted to Sparse",
+                    RowCount = 0,
+                    ColumnCount = 0
+                };
+                
+                _logger.LogPage(
+                    Path.GetFileName(pdfPath),
+                    page.PageNumber,
+                    page.IsSearchable,
+                    0,
+                    "error",
+                    $"Page classification failed: {ex.Message}. Defaulted to Sparse.");
+                
+                System.Diagnostics.Debug.WriteLine($"[BATCH] Page classification failed for page {page.PageNumber}: {ex.Message}");
+            }
+
+            // =====================================================
+            // PAGE ROUTING AND STRUCTURED RECORD BUILDING
+            // =====================================================
+
+            try
+            {
+                // Route page to appropriate extraction engine based on classification
+                if (result.Classification != null)
+                {
+                    var pageType = result.Classification.PageType;
+                    var sourceFileName = Path.GetFileName(pdfPath);
+
+                    if (pageType == PageType.Table)
+                    {
+                        // Invoke TableEngine for table-like layouts
+                        result.StructuredRecords = _tableEngine.BuildRecords(
+                            result.LayoutTokens,
+                            page.PageNumber,
+                            sourceFileName);
+
+                        _logger.LogPage(
+                            sourceFileName,
+                            page.PageNumber,
+                            page.IsSearchable,
+                            0,
+                            "info",
+                            $"Structured record building: TableEngine produced {result.StructuredRecords.Count} records");
+
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[BATCH] Page {page.PageNumber}: TableEngine produced {result.StructuredRecords.Count} records");
+                    }
+                    else if (pageType == PageType.Scattered)
+                    {
+                        // Invoke ProximityEngine for scattered layouts
+                        result.StructuredRecords = _proximityEngine.BuildRecords(
+                            result.LayoutTokens,
+                            page.PageNumber,
+                            sourceFileName);
+
+                        _logger.LogPage(
+                            sourceFileName,
+                            page.PageNumber,
+                            page.IsSearchable,
+                            0,
+                            "info",
+                            $"Structured record building: ProximityEngine produced {result.StructuredRecords.Count} records");
+
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[BATCH] Page {page.PageNumber}: ProximityEngine produced {result.StructuredRecords.Count} records");
+                    }
+                    else if (pageType == PageType.Sparse)
+                    {
+                        // Skip structured record building for sparse pages
+                        result.StructuredRecords = new List<StructuredRecord>();
+
+                        _logger.LogPage(
+                            sourceFileName,
+                            page.PageNumber,
+                            page.IsSearchable,
+                            0,
+                            "info",
+                            "Structured record building: Skipped (Sparse page)");
+
+                        System.Diagnostics.Debug.WriteLine(
+                            $"[BATCH] Page {page.PageNumber}: Skipped structured record building (Sparse page)");
+                    }
+                }
+                else
+                {
+                    // No classification available, skip structured record building
+                    result.StructuredRecords = new List<StructuredRecord>();
+                }
+            }
+            catch (Exception ex)
+            {
+                // Graceful fallback: log error and continue with empty structured records
+                result.StructuredRecords = new List<StructuredRecord>();
+                _logger.LogPage(
+                    Path.GetFileName(pdfPath),
+                    page.PageNumber,
+                    page.IsSearchable,
+                    0,
+                    "error",
+                    $"Structured record building failed: {ex.Message}. Continuing with regex-only extraction.");
+
+                System.Diagnostics.Debug.WriteLine($"[BATCH] Structured record building failed for page {page.PageNumber}: {ex.Message}");
+            }
 
             // =====================================================
             // PATTERN MATCHING

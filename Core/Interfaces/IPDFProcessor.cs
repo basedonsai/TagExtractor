@@ -26,5 +26,13 @@ namespace OCRTool.Core.Interfaces
         public string RawText { get; set; } = string.Empty;
         public byte[]? ImageData { get; set; }
         public int TextLength { get; set; }
+
+        /// <summary>
+        /// Reference to PdfPig page object for layout token extraction
+        /// Only populated for searchable pages
+        /// </summary>
+        public UglyToad.PdfPig.Content.Page? PdfPigPage { get; set; }
     }
+
+
 }

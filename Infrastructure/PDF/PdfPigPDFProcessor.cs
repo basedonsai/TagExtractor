@@ -69,7 +69,8 @@ namespace OCRTool.Infrastructure.PDF
                 IsSearchable = isSearchable,
                 RawText = text,
                 ImageData = imageData,
-                TextLength = text.Length
+                TextLength = text.Length,
+                PdfPigPage = isSearchable ? page : null // Store page reference for layout token extraction
             };
         }
 

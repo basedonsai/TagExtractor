@@ -2,8 +2,10 @@ using OCRTool.Core.Interfaces;
 using OCRTool.Core.Models;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text;
 using Tesseract;
 
 namespace OCRTool.Infrastructure.OCR
@@ -15,10 +17,12 @@ namespace OCRTool.Infrastructure.OCR
     public class TesseractOCRProvider : IOCRProvider, IDisposable
     {
         private readonly TesseractEngine _engine;
+        private readonly string _tessdataPath;
         private bool _disposed;
 
         public TesseractOCRProvider(string tessdataPath)
         {
+            _tessdataPath = tessdataPath;
             _engine = new TesseractEngine(tessdataPath, "eng", EngineMode.LstmOnly);
 
             // Better for structured engineering text
@@ -29,6 +33,154 @@ namespace OCRTool.Infrastructure.OCR
                 "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-+./:");
 
             _engine.SetVariable("preserve_interword_spaces", "1");
+        }
+
+        /// <summary>
+        /// Get TSV output from Tesseract for layout-aware extraction
+        /// </summary>
+        public string GetTsvOutput(byte[] imageData)
+        {
+            if (imageData == null || imageData.Length == 0)
+                return string.Empty;
+
+            string tempImagePath = null;
+            string tempOutputBase = null;
+
+            try
+            {
+                // Create temporary files
+                tempImagePath = Path.Combine(Path.GetTempPath(), $"tesseract_input_{Guid.NewGuid()}.png");
+                tempOutputBase = Path.Combine(Path.GetTempPath(), $"tesseract_output_{Guid.NewGuid()}");
+
+                // Write image to temp file
+                File.WriteAllBytes(tempImagePath, imageData);
+
+                // Find tesseract executable
+                string tesseractExe = FindTesseractExecutable();
+                if (string.IsNullOrEmpty(tesseractExe))
+                {
+                    return string.Empty;
+                }
+
+                // Run tesseract with TSV output
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = tesseractExe,
+                    Arguments = $"\"{tempImagePath}\" \"{tempOutputBase}\" -l eng --psm 3 tsv",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8
+                };
+
+                // Set TESSDATA_PREFIX environment variable
+                var tessdataParent = Directory.GetParent(_tessdataPath)?.FullName;
+                if (!string.IsNullOrEmpty(tessdataParent))
+                {
+                    startInfo.EnvironmentVariables["TESSDATA_PREFIX"] = tessdataParent;
+                }
+
+                using (var process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                        return string.Empty;
+
+                    process.WaitForExit(30000); // 30 second timeout
+
+                    // Read TSV output file
+                    string tsvOutputPath = tempOutputBase + ".tsv";
+                    if (File.Exists(tsvOutputPath))
+                    {
+                        return File.ReadAllText(tsvOutputPath, Encoding.UTF8);
+                    }
+                }
+
+                return string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+            finally
+            {
+                // Clean up temporary files
+                try
+                {
+                    if (tempImagePath != null && File.Exists(tempImagePath))
+                        File.Delete(tempImagePath);
+
+                    if (tempOutputBase != null)
+                    {
+                        var tsvFile = tempOutputBase + ".tsv";
+                        if (File.Exists(tsvFile))
+                            File.Delete(tsvFile);
+                    }
+                }
+                catch
+                {
+                    // Ignore cleanup errors
+                }
+            }
+        }
+
+        /// <summary>
+        /// Find tesseract executable in common locations
+        /// </summary>
+        private string FindTesseractExecutable()
+        {
+            var searchPaths = new[]
+            {
+                // Common installation paths
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Tesseract-OCR", "tesseract.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "tesseract", "tesseract.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Tesseract-OCR", "tesseract.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "tesseract", "tesseract.exe"),
+                
+                // Relative to tessdata path
+                Path.Combine(Directory.GetParent(_tessdataPath)?.FullName ?? "", "tesseract.exe"),
+                
+                // Check PATH environment variable
+                "tesseract.exe"
+            };
+
+            foreach (var path in searchPaths)
+            {
+                if (File.Exists(path))
+                    return path;
+            }
+
+            // Try to find in PATH
+            try
+            {
+                var startInfo = new ProcessStartInfo
+                {
+                    FileName = "where",
+                    Arguments = "tesseract.exe",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+
+                using (var process = Process.Start(startInfo))
+                {
+                    if (process != null)
+                    {
+                        var output = process.StandardOutput.ReadToEnd();
+                        process.WaitForExit();
+                        
+                        var lines = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+                        if (lines.Length > 0 && File.Exists(lines[0]))
+                            return lines[0];
+                    }
+                }
+            }
+            catch
+            {
+                // Ignore errors finding in PATH
+            }
+
+            return null;
         }
 
         /// <summary>
